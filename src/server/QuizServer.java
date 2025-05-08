@@ -9,15 +9,18 @@ public class QuizServer {
     private static final int PORT = 12345;
     private static final int MAX_PLAYERS = 3;
     public static final int TOTAL_PLAYERS = MAX_PLAYERS;
+
     public static final Object leaderboardLock = new Object();
     public static int finishedPlayers = 0;
     public static List<PrintWriter> allClientWriters = new ArrayList<>();
 
     public static ConcurrentMap<String, Integer> leaderboard = new ConcurrentHashMap<>();
-    private static List<Socket> lobbyClients = new ArrayList<>();
-    private static CountDownLatch startLatch = new CountDownLatch(1); // waits for admin to start
+    private static final List<Socket> lobbyClients = new ArrayList<>();
+    private static final CountDownLatch startLatch = new CountDownLatch(1); // waits for admin to start
 
     public static void main(String[] args) {
+        DatabaseInitializer.initializeDatabase();
+
         System.out.println("Quiz Server started on port " + PORT);
         System.out.println("Waiting for " + MAX_PLAYERS + " players and 1 admin to join...");
 
@@ -39,39 +42,43 @@ public class QuizServer {
             PrintWriter adminOut = new PrintWriter(adminSocket.getOutputStream(), true);
             adminOut.println("✅ Connected as Admin. Type 'start' to begin the quiz.");
 
-            // Listen for "start" command in separate thread
+            // Step 3: Listen for 'start' command from admin
             new Thread(() -> {
                 try {
                     while (true) {
                         String command = adminIn.readLine();
                         if ("start".equalsIgnoreCase(command)) {
                             System.out.println("✅ Admin started the quiz.");
-                            startLatch.countDown(); // release all players
+                            startLatch.countDown(); // unblock the game start
                             break;
+                        } else {
+                            adminOut.println("❌ Invalid command. Type 'start' to begin.");
                         }
                     }
                 } catch (IOException e) {
+                    System.err.println("❌ Admin command error.");
                     e.printStackTrace();
                 }
             }).start();
 
-            // Step 3: Wait for admin to start
+            // Step 4: Wait for admin to start
             System.out.println("🕒 Waiting for admin to start the quiz...");
-            startLatch.await(); // block here until admin types 'start'
+            startLatch.await(); // block until 'start' is received
 
-            // Step 4: Notify all players
+            // Step 5: Notify all players to start
             for (Socket clientSocket : lobbyClients) {
                 PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
                 out.println("START");
             }
 
-            // Step 5: Start quiz threads
+            // Step 6: Launch quiz for each player
             for (Socket clientSocket : lobbyClients) {
                 ClientHandler handler = new ClientHandler(clientSocket, leaderboard);
                 new Thread(handler).start();
             }
 
         } catch (IOException | InterruptedException e) {
+            System.err.println("❌ Server error occurred.");
             e.printStackTrace();
         }
     }

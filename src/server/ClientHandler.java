@@ -2,29 +2,24 @@ package server;
 
 import java.io.*;
 import java.net.Socket;
+import java.sql.*;
 import java.util.*;
 import java.util.concurrent.*;
-import utilities.Question;
 import java.net.SocketTimeoutException;
+import utilities.Question;
 
 public class ClientHandler implements Runnable {
     private Socket clientSocket;
     private ConcurrentMap<String, Integer> leaderboard;
-
-    private List<Question> questions = Arrays.asList(
-        new Question("What is the capital of France?",
-            new String[]{"Berlin", "London", "Paris", "Madrid"}, 2),
-        new Question("Which planet is known as the Red Planet?",
-            new String[]{"Earth", "Mars", "Jupiter", "Saturn"}, 1),
-        new Question("What is 5 + 7?",
-            new String[]{"10", "12", "14", "15"}, 1)
-    );
+    private List<Question> questions;
 
     public ClientHandler(Socket socket, ConcurrentMap<String, Integer> leaderboard) {
         this.clientSocket = socket;
         this.leaderboard = leaderboard;
+        this.questions = fetchQuestionsFromDB();
     }
-    
+
+    @Override
     public void run() {
         try (
             BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
@@ -41,21 +36,18 @@ public class ClientHandler implements Runnable {
 
                 out.println("You have 10 seconds to answer:");
                 out.println("QUESTION: " + q.getQuestionText());
-                out.flush();
 
                 for (String opt : q.getFormattedOptions()) {
                     out.println(opt);
                 }
                 out.println("Enter option number (1–4):");
 
-                String response = null;
                 clientSocket.setSoTimeout(10000);
+                String response = null;
                 try {
                     response = in.readLine();
                 } catch (SocketTimeoutException e) {
                     out.println("⏰ Time's up! Moving to next question.");
-                } catch (IOException e) {
-                    e.printStackTrace();
                 }
 
                 if (response != null) {
@@ -71,47 +63,87 @@ public class ClientHandler implements Runnable {
                         out.println("Invalid input.");
                     }
                 }
+
                 out.println("------");
             }
 
             leaderboard.put(name, score);
+            saveScoreToDB(name, score);
             out.println("Quiz over! Your score: " + score + "/" + questions.size());
 
-         // Register this client's writer to broadcast later
-         synchronized (QuizServer.allClientWriters) {
-             QuizServer.allClientWriters.add(out);
-         }
+            // Register this writer
+            synchronized (QuizServer.allClientWriters) {
+                QuizServer.allClientWriters.add(out);
+            }
 
-         // Track finished clients
-         synchronized (QuizServer.leaderboardLock) {
-             QuizServer.finishedPlayers++;
+            // Wait for all players to finish
+            synchronized (QuizServer.leaderboardLock) {
+                QuizServer.finishedPlayers++;
+                if (QuizServer.finishedPlayers < QuizServer.TOTAL_PLAYERS) {
+                    try {
+                        QuizServer.leaderboardLock.wait();
+                    } catch (InterruptedException e) {
+                        e.printStackTrace();
+                    }
+                } else {
+                    QuizServer.leaderboardLock.notifyAll();
 
-             if (QuizServer.finishedPlayers < QuizServer.TOTAL_PLAYERS) {
-                 // Wait until everyone finishes
-                 try {
-                     QuizServer.leaderboardLock.wait();
-                 } catch (InterruptedException e) {
-                     e.printStackTrace();
-                 }
-             } else {
-                 // Last player finished — notify all and broadcast leaderboard
-                 QuizServer.leaderboardLock.notifyAll();
+                    List<String> sorted = leaderboard.entrySet().stream()
+                        .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
+                        .map(e -> e.getKey() + ": " + e.getValue())
+                        .toList();
 
-                 List<String> sortedEntries = leaderboard.entrySet().stream()
-                     .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
-                     .map(entry -> entry.getKey() + ": " + entry.getValue())
-                     .toList();
+                    for (PrintWriter writer : QuizServer.allClientWriters) {
+                        writer.println("🏆 Leaderboard:");
+                        for (String s : sorted) {
+                            writer.println(s);
+                        }
+                        writer.println(); // End
+                    }
+                }
+            }
 
-                 for (PrintWriter writer : QuizServer.allClientWriters) {
-                     writer.println("🏆 Leaderboard:");
-                     for (String s : sortedEntries) {
-                         writer.println(s);
-                     }
-                     writer.println(); // signals end of leaderboard
-                 }
-             }
-         }
         } catch (IOException e) {
+            e.printStackTrace();
+        }
+    }
+
+    private List<Question> fetchQuestionsFromDB() {
+        List<Question> list = new ArrayList<>();
+        String dbUrl = "jdbc:sqlite:quiz.db";
+
+        try (Connection conn = DriverManager.getConnection(dbUrl);
+             Statement stmt = conn.createStatement();
+             ResultSet rs = stmt.executeQuery("SELECT * FROM questions")) {
+
+            while (rs.next()) {
+                String question = rs.getString("question");
+                String[] options = {
+                    rs.getString("option1"),
+                    rs.getString("option2"),
+                    rs.getString("option3"),
+                    rs.getString("option4")
+                };
+                int correctIndex = rs.getInt("answer_index") - 1;
+                list.add(new Question(question, options, correctIndex));
+            }
+        } catch (SQLException e) {
+            System.err.println("❌ Failed to load questions from DB");
+            e.printStackTrace();
+        }
+
+        return list;
+    }
+
+    private void saveScoreToDB(String name, int score) {
+        String sql = "INSERT INTO scores(name, score) VALUES(?, ?)";
+        try (Connection conn = DriverManager.getConnection("jdbc:sqlite:quiz.db");
+             PreparedStatement pstmt = conn.prepareStatement(sql)) {
+            pstmt.setString(1, name);
+            pstmt.setInt(2, score);
+            pstmt.executeUpdate();
+        } catch (SQLException e) {
+            System.err.println("❌ Failed to save score");
             e.printStackTrace();
         }
     }
