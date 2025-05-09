@@ -28,11 +28,21 @@ public class QuizServer {
 
             // Step 1: Accept PLAYER clients
             while (lobbyClients.size() < MAX_PLAYERS) {
-                Socket clientSocket = serverSocket.accept();
-                System.out.println("Player connected from: " + clientSocket.getInetAddress());
-                lobbyClients.add(clientSocket);
-                PrintWriter out = new PrintWriter(clientSocket.getOutputStream(), true);
-                out.println("✅ Waiting for more players to join... (" + lobbyClients.size() + "/" + MAX_PLAYERS + ")");
+            	Socket clientSocket = serverSocket.accept();
+            	System.out.println("Player connected from: " + clientSocket.getInetAddress());
+
+            	synchronized (lobbyClients) {
+            	    lobbyClients.add(clientSocket);
+            	    // Broadcast current lobby status to all clients
+            	    for (Socket s : lobbyClients) {
+            	        try {
+            	            PrintWriter pw = new PrintWriter(s.getOutputStream(), true);
+            	            pw.println("✅ Waiting for more players to join... (" + lobbyClients.size() + "/" + MAX_PLAYERS + ")");
+            	        } catch (IOException e) {
+            	            e.printStackTrace();
+            	        }
+            	    }
+            	}
             }
 
             // Step 2: Accept ADMIN connection

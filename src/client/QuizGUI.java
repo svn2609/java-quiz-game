@@ -16,6 +16,9 @@ public class QuizGUI extends JFrame {
     private boolean collectingLeaderboard = false;
     private StringBuilder leaderboardText = new StringBuilder();
     private boolean gameStarted = false;
+    private JLabel timerLabel;
+    private Timer countdownTimer;
+    private int timeLeft = 10;
 
     public QuizGUI(String serverAddress, int port) {
         try {
@@ -51,15 +54,22 @@ public class QuizGUI extends JFrame {
                 selectedOption = index + 1;
                 out.println(selectedOption);
                 disableButtons();
+                if (countdownTimer != null && countdownTimer.isRunning()) {
+                    countdownTimer.stop();
+                }
             });
             optionsPanel.add(optionButtons[i]);
         }
 
         frame.add(optionsPanel, BorderLayout.CENTER);
 
+        JPanel bottomPanel = new JPanel(new GridLayout(2, 1));
         statusLabel = new JLabel("✅ Waiting for more players to join...", SwingConstants.CENTER);
-        frame.add(statusLabel, BorderLayout.SOUTH);
+        timerLabel = new JLabel("", SwingConstants.CENTER);
+        bottomPanel.add(statusLabel);
+        bottomPanel.add(timerLabel);
 
+        frame.add(bottomPanel, BorderLayout.SOUTH);
         frame.setVisible(true);
     }
 
@@ -91,6 +101,7 @@ public class QuizGUI extends JFrame {
                         selectedOption = -1;
                         enableButtons();
                         statusLabel.setText("⏳ " + line);
+                        startCountdown();
                     } else if (line.startsWith("Enter option number")) {
                         // Ignore — we use buttons
                     } else if (line.trim().matches("^[1-4]\\. .*")) {
@@ -124,6 +135,27 @@ public class QuizGUI extends JFrame {
                 e.printStackTrace();
             }
         }).start();
+    }
+
+    private void startCountdown() {
+        if (countdownTimer != null && countdownTimer.isRunning()) {
+            countdownTimer.stop();
+        }
+
+        timeLeft = 10;
+        timerLabel.setText("⏳ Time left: " + timeLeft + "s");
+
+        countdownTimer = new Timer(1000, e -> {
+            timeLeft--;
+            if (timeLeft >= 0) {
+                timerLabel.setText("⏳ Time left: " + timeLeft + "s");
+            }
+            if (timeLeft <= 0) {
+                countdownTimer.stop();
+                disableButtons();
+            }
+        });
+        countdownTimer.start();
     }
 
     private void enableButtons() {
